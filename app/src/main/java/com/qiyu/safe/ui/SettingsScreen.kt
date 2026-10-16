@@ -36,6 +36,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import com.qiyu.safe.data.AppLock
 import com.qiyu.safe.data.OpResult
+import com.qiyu.safe.data.QuickTxn
 import com.qiyu.safe.data.VaultRepository
 import com.qiyu.safe.data.formatYuan
 import java.text.SimpleDateFormat
@@ -58,6 +59,9 @@ fun SettingsScreen() {
     var pendingImport by remember { mutableStateOf<String?>(null) }
     var exportPw by remember { mutableStateOf("") }
     val autoLock by AppLock.autoLockEnabled.collectAsState()
+    val quickTxn by QuickTxn.enabled.collectAsState()
+    var showQuickAuth by remember { mutableStateOf(false) }
+    var quickMsg by remember { mutableStateOf<String?>(null) }
 
     val exportLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.CreateDocument("application/json")
@@ -250,6 +254,45 @@ fun SettingsScreen() {
             }
         }
 
+        Card(Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(
+                    Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text(
+                        "快捷交易（指纹存取款）",
+                        style = MaterialTheme.typography.titleSmall,
+                        modifier = Modifier.weight(1f)
+                    )
+                    Switch(
+                        checked = quickTxn,
+                        onCheckedChange = { on ->
+                            if (on) showQuickAuth = true
+                            else {
+                                QuickTxn.disable()
+                                quickMsg = "已关闭"
+                            }
+                        }
+                    )
+                }
+                Text(
+                    "开启后，存入 / 取出可用指纹或面容一步确认，无需再输支付密码与验证器码；开启需一次性双重授权。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                quickMsg?.let {
+                    Text(
+                        it,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (it.startsWith("已") || it.startsWith("快捷")) MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.error
+                    )
+                }
+            }
+        }
+
         OutlinedButton(
             onClick = { AppLock.lock() },
             modifier = Modifier.fillMaxWidth()
@@ -297,6 +340,18 @@ fun SettingsScreen() {
             }
         )
     }
+    if (showQuickAuth) {
+        QuickTxnAuthDialog(
+            onConfirm = { pw, totp ->
+                showQuickAuth = false
+                when (val r = VaultRepository.authorizeQuickTxn(pw, totp)) {
+                    is OpResult.Ok -> quickMsg = "快捷交易已开启，可在首页用指纹存取款"
+                    is OpResult.Err -> quickMsg = r.message
+                }
+            },
+            onDismiss = { showQuickAuth = false }
+        )
+    }
 }
 
 /** 备份口令输入对话框。 */
@@ -327,6 +382,54 @@ private fun BackupPasswordDialog(
         },
         confirmButton = {
             TextButton(onClick = { onConfirm(pw) }, enabled = pw.length >= 6) { Text(confirmLabel) }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("取消") }
+        }
+    )
+}
+
+/** 快捷交易授权对话框：支付密码 + 验证器动态码 双重校验。 */
+@Composable
+private fun QuickTxnAuthDialog(
+    onConfirm: (String, String) -> Unit,
+    onDismiss: () -> Unit
+) {
+    var pw by remember { mutableStateOf("") }
+    var totp by remember { mutableStateOf("") }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("开启快捷交易") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    "需输入支付密码 + 微软验证器 6 位动态码，验证通过后开启快捷交易。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                OutlinedTextField(
+                    value = pw,
+                    onValueChange = { pw = it },
+                    label = { Text("支付密码") },
+                    visualTransformation = PasswordVisualTransformation(),
+                    singleLine = true,
+                    keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = KeyboardType.Password),
+                    modifier = Modifier.fillMaxWidth()
+                )
+                OutlinedTextField(
+                    value = totp,
+                    onValueChange = { totp = it },
+                    label = { Text("验证器动态码（6 位）") },
+                    singleLine = true,
+                    keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = KeyboardType.Number),
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { onConfirm(pw, totp) }, enabled = pw.length >= 6 && totp.length == 6) {
+                Text("验证并开启")
+            }
         },
         dismissButton = {
             TextButton(onClick = onDismiss) { Text("取消") }

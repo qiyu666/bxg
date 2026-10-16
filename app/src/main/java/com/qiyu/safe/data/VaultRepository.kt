@@ -48,6 +48,7 @@ object VaultRepository {
 
     fun logout() {
         SessionManager.clear(context)
+        QuickTxn.disable()
         uiState.update { UiState() }
     }
 
@@ -96,6 +97,7 @@ object VaultRepository {
         val uid = db.writableDatabase.insert("users", null, cv)
         SessionManager.persist(context, uid)
         AppLock.unlock()
+        QuickTxn.disable()
         refresh()
         return OpResult.Ok("注册成功，请绑定微软验证器")
     }
@@ -111,6 +113,7 @@ object VaultRepository {
             if (!Security.verifyPassword(password, salt, hash)) return OpResult.Err("PASS", "支付密码错误")
             SessionManager.persist(context, uid)
             AppLock.unlock()
+            QuickTxn.disable()
             refresh()
             return OpResult.Ok("登录成功")
         }
@@ -254,6 +257,62 @@ object VaultRepository {
         insertTxn(uid, "WITHDRAW", amountFen, System.currentTimeMillis(), null, "活期取出")
         refresh()
         return OpResult.Ok("取出成功")
+    }
+
+    // ---------------- 快捷交易（指纹确认，免双因子） ----------------
+
+    /** 开启快捷交易：需「支付密码 + 验证器动态码」双重授权，成功后 QuickTxn.enable()。 */
+    fun authorizeQuickTxn(paymentPassword: String, totpCode: String): OpResult {
+        val uid = SessionManager.currentUserId
+        if (uid < 0) return OpResult.Err("NOUSER", "未登录")
+        if (!checkPaymentPassword(uid, paymentPassword)) return OpResult.Err("PASS", "支付密码错误")
+        val secret = loadTotpSecret(uid)
+        if (secret.isNullOrEmpty()) return OpResult.Err("TOTP", "请先绑定微软验证器")
+        if (!Totp.verify(secret, totpCode.trim())) return OpResult.Err("TOTP", "验证器动态码错误")
+        QuickTxn.enable()
+        return OpResult.Ok("快捷交易已开启")
+    }
+
+    /** 快捷存入（已授权，免双因子）：直接记账。 */
+    fun quickDeposit(amountFen: Long, term: TermType, periodMonths: Int, note: String): OpResult {
+        if (!QuickTxn.enabled.value) return OpResult.Err("OFF", "快捷交易未开启")
+        val uid = SessionManager.currentUserId
+        if (uid < 0) return OpResult.Err("NOUSER", "未登录")
+        if (amountFen <= 0) return OpResult.Err("AMOUNT", "金额必须大于 0")
+        val now = System.currentTimeMillis()
+        val mature = if (term == TermType.FIXED) addMonths(now, periodMonths) else 0L
+        db.writableDatabase.insert(
+            "deposits", null,
+            ContentValues().apply {
+                put("user_id", uid)
+                put("amount_fen", amountFen)
+                put("term", term.name)
+                put("period_months", if (term == TermType.FIXED) periodMonths else 0)
+                put("start_ts", now)
+                put("mature_ts", mature)
+                put("converted", 0)
+                put("note", note.trim())
+            }
+        )
+        val desc = if (term == TermType.FIXED) "死期 ${periodMonths} 个月" else "活期"
+        val notePart = note.trim().let { if (it.isEmpty()) "" else "（$it）" }
+        insertTxn(uid, "DEPOSIT", amountFen, now, null, "$desc（指纹）$notePart")
+        refresh()
+        return OpResult.Ok("已存入（指纹）")
+    }
+
+    /** 快捷取出（已授权，免双因子）：仅限活期可用部分。 */
+    fun quickWithdraw(amountFen: Long): OpResult {
+        if (!QuickTxn.enabled.value) return OpResult.Err("OFF", "快捷交易未开启")
+        val uid = SessionManager.currentUserId
+        if (uid < 0) return OpResult.Err("NOUSER", "未登录")
+        if (amountFen <= 0) return OpResult.Err("AMOUNT", "金额必须大于 0")
+        if (amountFen > computeBalances(uid).demandFen) {
+            return OpResult.Err("OVER", "超出活期可用余额（死期未到期部分不可取出）")
+        }
+        insertTxn(uid, "WITHDRAW", amountFen, System.currentTimeMillis(), null, "活期取出（指纹）")
+        refresh()
+        return OpResult.Ok("已取出（指纹）")
     }
 
     // ---------------- 备份（加密 JSON 导出 / 导入） ----------------

@@ -44,13 +44,13 @@ fun VaultApp(activity: FragmentActivity) {
     when {
         !state.value.loggedIn -> AuthScreen()
         locked.value -> LockScreen(activity)
-        else -> VaultShell(username = state.value.username)
+        else -> VaultShell(username = state.value.username, activity = activity)
     }
 }
 
 @OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
-fun VaultShell(username: String) {
+fun VaultShell(username: String, activity: FragmentActivity) {
     var tab by remember { mutableIntStateOf(0) }
     Scaffold(
         topBar = {
@@ -76,7 +76,7 @@ fun VaultShell(username: String) {
     ) { padding ->
         Box(modifier = Modifier.fillMaxSize().padding(padding)) {
             when (tab) {
-                0 -> HomeScreen(onOpenAuthenticator = { tab = 2 })
+                0 -> HomeScreen(activity, onOpenAuthenticator = { tab = 2 })
                 1 -> HistoryScreen()
                 2 -> AuthenticatorScreen()
                 3 -> SettingsScreen()

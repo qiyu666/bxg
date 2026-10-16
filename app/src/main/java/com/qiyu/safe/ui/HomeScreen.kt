@@ -31,7 +31,9 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.fragment.app.FragmentActivity
 import com.qiyu.safe.data.OpResult
+import com.qiyu.safe.data.QuickTxn
 import com.qiyu.safe.data.TermType
 import com.qiyu.safe.data.VaultRepository
 import com.qiyu.safe.data.formatYuan
@@ -39,7 +41,7 @@ import java.math.BigDecimal
 
 /** 首页：余额总览 + 存入 / 取出（双重校验）。 */
 @Composable
-fun HomeScreen(onOpenAuthenticator: () -> Unit) {
+fun HomeScreen(activity: FragmentActivity, onOpenAuthenticator: () -> Unit) {
     val state = VaultRepository.uiState.collectAsState()
     val s = state.value
     var showDeposit by remember { mutableStateOf(false) }
@@ -133,8 +135,8 @@ fun HomeScreen(onOpenAuthenticator: () -> Unit) {
         }
     }
 
-    if (showDeposit) DepositDialog(onDismiss = { showDeposit = false })
-    if (showWithdraw) WithdrawDialog(onDismiss = { showWithdraw = false })
+    if (showDeposit) DepositDialog(activity, onDismiss = { showDeposit = false })
+    if (showWithdraw) WithdrawDialog(activity, onDismiss = { showWithdraw = false })
 }
 
 @Composable
@@ -149,7 +151,8 @@ private fun BalanceCard(title: String, fen: Long, modifier: Modifier = Modifier)
 
 /** 存入对话框：金额 + 活期/死期 + 期限 + 备注 + 验证器动态码 + 支付密码。 */
 @Composable
-fun DepositDialog(onDismiss: () -> Unit) {
+fun DepositDialog(activity: FragmentActivity, onDismiss: () -> Unit) {
+    val quickTxn = QuickTxn.enabled.collectAsState()
     var amountYuan by remember { mutableStateOf("") }
     var term by remember { mutableStateOf(TermType.DEMAND) }
     var periodMonths by remember { mutableLongStateOf(3L) }
@@ -173,6 +176,36 @@ fun DepositDialog(onDismiss: () -> Unit) {
                     keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = KeyboardType.Number),
                     singleLine = true
                 )
+                if (quickTxn.value) {
+                    Button(
+                        onClick = {
+                            val fen = parseYuanToFen(amountYuan)
+                            if (fen == null || fen <= 0) {
+                                error = "请先输入大于 0 的金额"
+                                return@Button
+                            }
+                            busy = true
+                            BiometricHelper.confirm(
+                                activity,
+                                activity,
+                                onSuccess = {
+                                    when (val r = VaultRepository.quickDeposit(fen, term, periodMonths.toInt(), note)) {
+                                        is OpResult.Ok -> onDismiss()
+                                        is OpResult.Err -> {
+                                            error = r.message
+                                            busy = false
+                                        }
+                                    }
+                                },
+                                onFail = { fail ->
+                                    error = "$fail，请改用支付密码 + 验证器码"
+                                    busy = false
+                                }
+                            )
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) { Text("👆 指纹快速存入（快捷交易已开启）") }
+                }
                 Text("期限", style = MaterialTheme.typography.bodyMedium)
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     FilterChip(selected = term == TermType.DEMAND, onClick = { term = TermType.DEMAND }, label = { Text("活期") })
@@ -246,7 +279,8 @@ fun DepositDialog(onDismiss: () -> Unit) {
 
 /** 取出对话框：金额 + 验证器动态码 + 支付密码。 */
 @Composable
-fun WithdrawDialog(onDismiss: () -> Unit) {
+fun WithdrawDialog(activity: FragmentActivity, onDismiss: () -> Unit) {
+    val quickTxn = QuickTxn.enabled.collectAsState()
     var amountYuan by remember { mutableStateOf("") }
     var totp by remember { mutableStateOf("") }
     var payPass by remember { mutableStateOf("") }
@@ -266,6 +300,36 @@ fun WithdrawDialog(onDismiss: () -> Unit) {
                     keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = KeyboardType.Number),
                     singleLine = true
                 )
+                if (quickTxn.value) {
+                    Button(
+                        onClick = {
+                            val fen = parseYuanToFen(amountYuan)
+                            if (fen == null || fen <= 0) {
+                                error = "请先输入大于 0 的金额"
+                                return@Button
+                            }
+                            busy = true
+                            BiometricHelper.confirm(
+                                activity,
+                                activity,
+                                onSuccess = {
+                                    when (val r = VaultRepository.quickWithdraw(fen)) {
+                                        is OpResult.Ok -> onDismiss()
+                                        is OpResult.Err -> {
+                                            error = r.message
+                                            busy = false
+                                        }
+                                    }
+                                },
+                                onFail = { fail ->
+                                    error = "$fail，请改用支付密码 + 验证器码"
+                                    busy = false
+                                }
+                            )
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) { Text("👆 指纹快速取出（快捷交易已开启）") }
+                }
                 OutlinedTextField(
                     value = totp,
                     onValueChange = { totp = it },

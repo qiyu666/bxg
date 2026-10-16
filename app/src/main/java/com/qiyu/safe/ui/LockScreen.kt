@@ -134,6 +134,40 @@ object BiometricHelper {
             onError?.invoke("生物识别异常(${e::class.java.simpleName})：${e.message}")
         }
     }
+
+    /** 通用生物识别确认（快捷交易）：仅指纹/面容（BIOMETRIC_STRONG），成功 onSuccess，失败/取消 onFail。 */
+    fun confirm(
+        activity: FragmentActivity,
+        ctx: Context,
+        onSuccess: () -> Unit,
+        onFail: (String) -> Unit
+    ) {
+        if (!available(ctx)) {
+            onFail(statusText(ctx).ifEmpty { "生物识别不可用" })
+            return
+        }
+        try {
+            val callback = object : BiometricPrompt.AuthenticationCallback() {
+                override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) = onSuccess()
+                override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
+                    onFail("生物识别失败(code=$errorCode)：$errString")
+                }
+
+                override fun onAuthenticationFailed() {}
+            }
+            val prompt = BiometricPrompt(activity, ContextCompat.getMainExecutor(ctx), callback)
+            val info = BiometricPrompt.PromptInfo.Builder()
+                .setTitle("确认交易")
+                .setSubtitle("验证指纹 / 面容以完成存取款")
+                .setAllowedAuthenticators(BiometricManager.Authenticators.BIOMETRIC_STRONG)
+                .setNegativeButtonText("取消")
+                .build()
+            prompt.authenticate(info)
+        } catch (e: Throwable) {
+            android.util.Log.e("BiometricHelper", "biometric confirm failed", e)
+            onFail("生物识别异常：${e.message}")
+        }
+    }
 }
 
 /** 解锁页：生物识别优先（含权限申请），支付密码兜底。解锁后调用 AppLock.unlock()。 */
